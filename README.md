@@ -40,5 +40,5 @@ docker container run -p 4001:80 9755de4bfb81
 ```
 this command i running port 4001.
 As a result
-![results](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/pic/localhost_test_docker.png)
+![results](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/localhost_test_docker.png)
 
