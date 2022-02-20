@@ -81,7 +81,7 @@ And edit this file was created.
 ```
 Host @nameHostYouRemote
         HostName @Ip
-        IdentityFile ~/.ssh/@FileYouWasCreated
+        IdentityFile ~/.ssh/id_rsa
         User @userRemote
 ```
 ## Install on VPS
