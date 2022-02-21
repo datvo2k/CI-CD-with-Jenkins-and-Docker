@@ -127,6 +127,339 @@ Here a few commands:
 fail2ban-client status sshd             # check status
 zgrep 'Ban' /var/log/fail2ban.log*      # look at the full list IPs have been blocked
 ```
+So next step you create folder and run docker-compose.
+```
+ssh @nameHostYouRemote
+```
+Into server, organize folder like this:
+```
+├── docker-compose.yml
+├── jenkins
+│   ├── Dockerfile
+│   └── docker-entrypoint.sh
+├── nginx
+│   ├── default.conf
+│   └── prefix_jenkins.conf
+└── ssl
+```
+In ssl folder, we run command to authenticate ssl:
+```
+openssl req -x509 -outform pem -out chain.pem -keyout privkey.pem \
+  -newkey rsa:4096 -nodes -sha256 -days 3650 \
+  -subj '/CN=localhost' -extensions EXT -config <( \
+   printf "[dn]\nCN=localhost\n[req]\ndistinguished_name = dn\n[EXT]\nsubjectAltName=DNS:localhost\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth")
+cat chain.pem > fullchain.pem
+```
+Create file .env and populate according to your environment
+```
+# docker-compose environment file
 
+# Jenkins Settings
+export JENKINS_LOCAL_HOME=./jenkins_home
+export JENKINS_UID=1000
+export JENKINS_GID=1000
+export HOST_DOCKER_SOCK=/var/run/docker.sock
+
+# Nginx Settings
+export NGINX_CONF=./nginx/default.conf
+export NGINX_SSL_CERTS=./ssl
+export NGINX_LOGS=./logs/nginx
+```
+This all script below is referenced at https://github.com/mjstealey \
+Now edit file `docker-compose.yml`
+```
+version: "3.9"
+services:
+
+  jenkins:
+    # default ports 8080, 50000 - expose mapping as needed to host
+    build:
+      context: ./jenkins
+      dockerfile: Dockerfile
+    container_name: cicd-jenkins
+    restart: unless-stopped
+    networks:
+      - jenkins
+    ports:
+      - "50000:50000"
+    environment:
+      # Uncomment JENKINS_OPTS to add prefix: e.g. https://127.0.0.1:8443/jenkins
+      #- JENKINS_OPTS="--prefix=/jenkins"
+      - JENKINS_UID=${JENKINS_UID}
+      - JENKINS_GID=${JENKINS_GID}
+    volumes:
+      - ${JENKINS_LOCAL_HOME}:/var/jenkins_home
+      - ${HOST_DOCKER_SOCK}:/var/run/docker.sock
+
+  nginx:
+    # default ports 80, 443 - expose mapping as needed to host
+    image: nginx:1
+    container_name: cicd-nginx
+    restart: unless-stopped
+    networks:
+      - jenkins
+    ports:
+      - "8080:80"    # http
+      - "8443:443"   # https
+    volumes:
+      - ${JENKINS_LOCAL_HOME}:/var/jenkins_home
+      - ${NGINX_CONF}:/etc/nginx/conf.d/default.conf
+      - ${NGINX_SSL_CERTS}:/etc/ssl
+      - ${NGINX_LOGS}:/var/log/nginx
+
+networks:
+  jenkins:
+    name: cicd-jenkins
+    driver: bridge
+```
+Into jenkins folder, edit `Dockerfile`
+```
+FROM jenkins/jenkins:lts-jdk11
+
+USER root
+RUN apt-get update && apt-get install -y lsb-release sudo
+RUN curl -fsSLo /usr/share/keyrings/docker-archive-keyring.asc \
+  https://download.docker.com/linux/debian/gpg
+RUN echo "deb [arch=$(dpkg --print-architecture) \
+  signed-by=/usr/share/keyrings/docker-archive-keyring.asc] \
+  https://download.docker.com/linux/debian \
+  $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
+RUN apt-get update && apt-get install -y docker-ce-cli \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+USER jenkins
+
+# set default user attributes
+ENV JENKINS_UID=1000
+ENV JENKINS_GID=1000
+
+# add entrypoint script
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+
+# normally user would be set to jenkins, but this is handled by the docker-entrypoint script on startup
+#USER jenkins
+USER root
+
+# bypass normal entrypoint and use custom one
+#ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/jenkins.sh"]
+ENTRYPOINT ["/sbin/tini", "--", "/docker-entrypoint.sh"]
+```
+and `docker-entrypoint.sh`
+```
+#!/usr/bin/env bash
+set -e
+
+# jenkins user requires valid UID:GID permissions at the host level to persist data
+#
+# set Jenkins UID and GID values (as root)
+usermod -u ${JENKINS_UID} jenkins
+groupmod -g ${JENKINS_GID} jenkins
+# update ownership of directories (as root)
+{
+  chown -R jenkins:jenkins /var/jenkins_home
+  chown -R jenkins:jenkins /usr/share/jenkins/ref
+} ||
+{
+  echo "[ERROR] Failed 'chown -R jenkins:jenkins ...' command"
+}
+
+# allow jenkins to run sudo docker (as root)
+echo "jenkins ALL=(root) NOPASSWD: /usr/bin/docker" > /etc/sudoers.d/jenkins
+chmod 0440 /etc/sudoers.d/jenkins
+
+# run Jenkins (as jenkins)
+sed -i "s# exec java# exec $(which java)#g" /usr/local/bin/jenkins.sh
+su jenkins -c 'cd $HOME; export PATH=$PATH:$(which java); /usr/local/bin/jenkins.sh'
+```
+So must be remember run this for `docker-entryponit.sh`
+```
+chmod + x docker-entryponit.sh
+```
+Next `cd ngnix` and write `default.conf`
+```
+upstream jenkins {
+    keepalive 32;              # keepalive connections
+    server cicd-jenkins:8080;  # jenkins container ip and port
+}
+
+# Required for Jenkins websocket agents
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    '' close;
+}
+
+server {
+    listen 80;                    # Listen on port 80 for IPv4 requests
+    server_name $host;
+    return 301 https://$host:8443$request_uri; # replace '8443' with your https port
+}
+
+server {
+    listen          443 ssl;      # Listen on port 443 for IPv4 requests
+    server_name     $host:8443;   # replace '$host:8443' with your server domain name and port
+
+    # SSL certificate - replace as required with your own trusted certificate
+    ssl_certificate /etc/ssl/fullchain.pem;
+    ssl_certificate_key /etc/ssl/privkey.pem;
+
+    # logging
+    access_log      /var/log/nginx/jenkins.access.log;
+    error_log       /var/log/nginx/jenkins.error.log;
+
+    # this is the jenkins web root directory
+    # (mentioned in the /etc/default/jenkins file)
+    root            /var/jenkins_home/war/;
+
+    # pass through headers from Jenkins that Nginx considers invalid
+    ignore_invalid_headers off;
+
+    location ~ "^/static/[0-9a-fA-F]{8}\/(.*)$" {
+        # rewrite all static files into requests to the root
+        # E.g /static/12345678/css/something.css will become /css/something.css
+        rewrite "^/static/[0-9a-fA-F]{8}\/(.*)" /$1 last;
+    }
+
+    location /userContent {
+        # have nginx handle all the static requests to userContent folder
+        # note : This is the $JENKINS_HOME dir
+        root /var/jenkins_home/;
+        if (!-f $request_filename) {
+            # this file does not exist, might be a directory or a /**view** url
+            rewrite (.*) /$1 last;
+            break;
+        }
+        sendfile on;
+    }
+
+    location / {
+        sendfile off;
+        proxy_pass         http://jenkins;
+        proxy_redirect     default;
+        proxy_http_version 1.1;
+
+        # Required for Jenkins websocket agents
+        proxy_set_header   Connection        $connection_upgrade;
+        proxy_set_header   Upgrade           $http_upgrade;
+
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   X-Forwarded-Host  $host;
+        proxy_set_header   X-Forwarded-Port  8443; # replace '8443' with your https port
+        proxy_max_temp_file_size 0;
+
+        #this is the maximum upload size
+        client_max_body_size       10m;
+        client_body_buffer_size    128k;
+
+        proxy_connect_timeout      90;
+        proxy_send_timeout         90;
+        proxy_read_timeout         90;
+        proxy_buffering            off;
+        proxy_request_buffering    off; # Required for HTTP CLI commands
+        proxy_set_header Connection ""; # Clear for keepalive
+    }
+
+}
+``` 
+And `prefix_jenkins.conf`
+```
+upstream jenkins {
+    keepalive 32;              # keepalive connections
+    server cicd-jenkins:8080;  # jenkins container ip and port
+}
+
+# Required for Jenkins websocket agents
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    '' close;
+}
+
+server {
+    listen 80;                    # Listen on port 80 for IPv4 requests
+    server_name $host;
+    return 301 https://$host:8443$request_uri; # replace '8443' with your https port
+}
+
+server {
+    listen          443 ssl;      # Listen on port 443 for IPv4 requests
+    server_name     $host:8443;   # replace '$host:8443' with your server domain name and port
+
+    # SSL certificate - replace as required with your own trusted certificate
+    ssl_certificate /etc/ssl/fullchain.pem;
+    ssl_certificate_key /etc/ssl/privkey.pem;
+
+    # logging
+    access_log      /var/log/nginx/jenkins.access.log;
+    error_log       /var/log/nginx/jenkins.error.log;
+
+    # this is the jenkins web root directory
+    # (mentioned in the /etc/default/jenkins file)
+    root            /var/jenkins_home/war/;
+
+    # pass through headers from Jenkins that Nginx considers invalid
+    ignore_invalid_headers off;
+
+    location ~ "^/static/[0-9a-fA-F]{8}\/(.*)$" {
+        # rewrite all static files into requests to the root
+        # E.g /static/12345678/css/something.css will become /css/something.css
+        rewrite "^/static/[0-9a-fA-F]{8}\/(.*)" /$1 last;
+    }
+
+    location /jenkins/userContent {
+        # have nginx handle all the static requests to userContent folder
+        # note : This is the $JENKINS_HOME dir
+        root /var/jenkins_home/;
+        if (!-f $request_filename) {
+            # this file does not exist, might be a directory or a /**view** url
+            rewrite (.*) /$1 last;
+            break;
+        }
+        sendfile on;
+    }
+
+    location /jenkins {
+        sendfile off;
+        proxy_pass         http://jenkins;
+        proxy_redirect     default;
+        proxy_http_version 1.1;
+
+        # Required for Jenkins websocket agents
+        proxy_set_header   Connection        $connection_upgrade;
+        proxy_set_header   Upgrade           $http_upgrade;
+
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   X-Forwarded-Host  $host;
+        proxy_set_header   X-Forwarded-Port  8443; # replace '8443' with your https port
+        proxy_max_temp_file_size 0;
+
+        #this is the maximum upload size
+        client_max_body_size       10m;
+        client_body_buffer_size    128k;
+
+        proxy_connect_timeout      90;
+        proxy_send_timeout         90;
+        proxy_read_timeout         90;
+        proxy_buffering            off;
+        proxy_request_buffering    off; # Required for HTTP CLI commands
+        proxy_set_header Connection ""; # Clear for keepalive
+    }
+
+    location / {
+        rewrite ^/ $scheme://$host:8443/jenkins permanent; # replace '8443' with your https port
+    }
+
+}
+```
+Next run `source .env` and run `docker-compose up`. Copy the password from the file intialAdminPassword. Then choose `install suggested plugins`. Wait until the plugins are completed installed and create an Admin user for Jenkins.
+![jenkins_admin1](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/jenkins_1.png)
+![jenkins_admin2](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/jenkins_3.png)
+Finnally here is the default jenkins page.
+![jenkins_admin3](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/jenkins_2.png)
 
 
