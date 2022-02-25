@@ -462,4 +462,14 @@ Next run `source .env` and run `docker-compose up`. Copy the password from the f
 Finnally here is the default jenkins page.
 ![jenkins_admin3](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/jenkins_2.png)
 
+Next move, add github Oauth. 
+![jenkins_admin4](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/jenkins_4.png)
+And remember add `securityRealm/finishLogin` behind your URL in `Authorization callback URL`. Go to `Dashboard -> Configure Global Security` and add `Client ID`
+![jenkins_admin5](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/jenkins_6.png)
+
+Next step, we go to jenkins and config pipeline. <br/>
+Go to `Dashboard -> Plugin manager` and install some plugin we need.
+![jenkins_admin6](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/jenkins_7.png)
+
+
 
