@@ -468,8 +468,64 @@ And remember add `securityRealm/finishLogin` behind your URL in `Authorization c
 ![jenkins_admin5](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/jenkins_6.png)
 
 Next step, we go to jenkins and config pipeline. <br/>
-Go to `Dashboard -> Plugin manager` and install some plugin we need.
+Go to `Dashboard -> Plugin manager` and install some plugins we need.
 ![jenkins_admin6](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/jenkins_7.png)
+`Dashboard -> Credentials -> System -> Global credentials` and add credentials you would add. Remember in `password` must be add token for you software.
+![jenkins_admin11](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/jenkins_12.png)
+![jenkins_admin7](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/jenkins_13.png)
+Now we will create our pipeline. Type the name you want for this Pipeline project
+![jenkins_admin8](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/jenkins_11.png)
+You have to add github credentials and give your github repository url. And save and apply it. Here you have to write your dockerfile for your project. 
+![jenkins_admin9](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/jenkins_14.png)
+![jenkins_admin10](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/Screenshot%202022-02-26%20012122.png)
+We'll need to tell Jenkins what our stages are, and what to do in each one of them. For this we'll write a Jenkins Pipeline in a `Jenkinsfile`
+```
+pipeline {
+  environment {
+    imagename = "brianvo/blog-demo"
+    registryCredential = 'docker-hub-webdemo'
+    dockerImage = ''
+  }
+  agent any
+  stages {
+    stage('Cloning Git') {
+      steps {
+        checkout scm
+      }
+    }
+    stage('Building image') {
+      steps{
+        script {
+          dockerImage = docker.build imagename
+        }
+      }
+    }
+    stage('Deploy Image') {
+      steps{
+        script {
+          docker.withRegistry( '', registryCredential ) {
+            dockerImage.push("$BUILD_NUMBER")
+             dockerImage.push('latest')
+          }
+        }
+      }
+    }
+    stage('Remove Unused docker image') {
+      steps{
+        sh "docker rmi $imagename:$BUILD_NUMBER"
+         sh "docker rmi $imagename:latest"
+ 
+      }
+    }
+  }
+}
+```
+Go to dockerhub and create your repo. Replace `imagename` and `registryCredential ` by your docker repo and ID credentials.
+Build project and waiting process done!!!!
+![jenkins_admin11](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/jenkins_final.png)
+
+
+
 
 
 
