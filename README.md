@@ -523,6 +523,9 @@ pipeline {
 Go to dockerhub and create your repo. Replace `imagename` and `registryCredential ` by your docker repo and ID credentials.
 Build project and waiting process done!!!!
 ![jenkins_admin11](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/jenkins_final.png)
+Check docker hub
+![jenkins_admin12](https://github.com/datvo2k/CI-CD-with-Jenkins-and-Docker/blob/main/pic/Screenshot%202022-02-26%20014651.png)
+AND DONE!!!
 
 
 
